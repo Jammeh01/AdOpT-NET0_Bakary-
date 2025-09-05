@@ -93,10 +93,11 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
     }
 
     # ETS sector definitions based on real EU ETS coverage
-    ets1_sectors = ['Electricity', 'Industry', 'Other Energy',
-                    'Air Transport', 'Water Transport']  # Power, industry, aviation, maritime
-    ets2_sectors = ['Road Transport', 'Rail Transport', 'Other Transport', 
-                    'Services']  # Remaining transport + commercial buildings from 2027
+    ets1_sectors = ['Electricity', 'Industry', 'Gas', 'Other Energy',
+                    'Air Transport', 'Water Transport']  # Power, industry, gas, aviation, maritime
+    ets2_sectors = ['Road Transport', 'Other Transport', 
+                    'Services']  # Road transport + commercial buildings from 2027
+    non_ets_sectors = ['Agriculture', 'Rail Transport']  # Non-ETS sectors
     
     # Household energy consumption patterns by ETS2 coverage with switching options
     household_energy_impact = {
@@ -184,7 +185,9 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
         print(f"Institutional Agents: {len(institutions)}")
         print(f"ETS1 sectors (covered now): {ets1_sectors}")
         print(f"ETS2 sectors (from 2027): {ets2_sectors}")
-        print("Aviation & Maritime now in ETS1 for immediate carbon pricing")
+        print(f"Non-ETS sectors: {non_ets_sectors}")
+        print("Gas sector moved to ETS1 for direct carbon pricing")
+        print("Rail Transport moved to non-ETS category")
         print(f"Household ETS2 exposure: {household_energy_impact['ets2_exposure']*100:.0f}% of energy consumption")
         print(f"Energy carriers with switching: {len(energy_carriers_switching)}")
         print("Dynamic fuel switching based on ETS costs and preferences enabled")
@@ -229,8 +232,8 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
             }
         },
         'ets1': {
-            'name': 'ETS1 - Power, Industry, Aviation & Maritime with Switching',
-            'description': 'EU ETS extension with targeted fuel switching incentives for covered sectors',
+            'name': 'ETS1 - Power, Industry, Gas, Aviation & Maritime with Switching',
+            'description': 'EU ETS extension including gas sector with targeted fuel switching incentives for covered sectors',
             'carbon_price_2021': 50,  # €/tCO2
             'carbon_price_growth': 0.05,  # 5% annual growth
             'ets_coverage': ets1_sectors,
@@ -265,6 +268,13 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
                     'storage_investment': 'High',
                     'switching_barriers_addressed': ['Grid modernization', 'Storage deployment']
                 },
+                'Gas': {
+                    'switching_speed': 'Medium',
+                    'target_renewable_share': 0.50,
+                    'biogas_adoption': 0.25,
+                    'hydrogen_blending': 0.15,
+                    'switching_barriers_addressed': ['Pipeline conversion', 'Biogas production', 'Hydrogen infrastructure']
+                },
                 'Aviation': {
                     'switching_speed': 'Medium',
                     'sustainable_fuel_share': 0.40,
@@ -280,8 +290,8 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
             }
         },
         'ets2': {
-            'name': 'ETS2 - Full Economy with Comprehensive Switching Support',
-            'description': 'EU ETS extension with comprehensive fuel switching support for all sectors and households',
+            'name': 'ETS2 - Road Transport & Commercial Buildings with Comprehensive Switching Support',
+            'description': 'EU ETS extension excluding rail transport with comprehensive fuel switching support for remaining sectors and households',
             'carbon_price_2021': 25,  # €/tCO2 (starts in 2027)
             'carbon_price_2027': 40,  # €/tCO2 (starting price for transport/buildings)
             'carbon_price_growth': 0.08,  # 8% annual growth
@@ -335,12 +345,6 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
                     'electrification_target': 0.75,
                     'hydrogen_potential': 0.15,
                     'switching_barriers_addressed': ['Purchase incentives', 'Charging infrastructure', 'Total cost of ownership']
-                },
-                'Rail Transport': {
-                    'switching_speed': 'Fast',
-                    'electrification_target': 0.90,
-                    'hydrogen_potential': 0.10,
-                    'switching_barriers_addressed': ['Grid connection', 'Infrastructure upgrade']
                 },
                 'Services': {
                     'switching_speed': 'Medium',

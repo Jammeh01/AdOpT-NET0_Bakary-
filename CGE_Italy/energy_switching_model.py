@@ -94,14 +94,14 @@ def main():
             'policy_support': 'Limited',
             'switching_rate': 'Slow'
         },
-        'ETS1 (Power + Industry + Aviation/Maritime)': {
+        'ETS1 (Power + Industry + Gas + Aviation/Maritime)': {
             'carbon_price_2021': 50,
             'carbon_price_growth': 0.05,
             'switching_incentives': 'Moderate',
             'policy_support': 'Targeted',
             'switching_rate': 'Medium'
         },
-        'ETS2 (Full Economy + Households)': {
+        'ETS2 (Road Transport + Commercial Buildings)': {
             'carbon_price_2021': 40,  # Starts 2027
             'carbon_price_growth': 0.08,
             'switching_incentives': 'Strong',
