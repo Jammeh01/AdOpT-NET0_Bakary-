@@ -38,7 +38,7 @@ class RenewableTransitionCGE:
                 'name': 'Renewable Electricity',
                 'description': 'Solar PV, wind, hydro, biomass electricity',
                 'co2_factor': 0.0,  # Zero emissions for renewables
-                'base_price_2021': 90,  # EUR/MWh
+                'base_price_2021': 15,  # EUR/MWh
                 'learning_curve': 0.85,  # 15% cost reduction per doubling
                 'resource_potential': 'High'
             },
@@ -46,7 +46,7 @@ class RenewableTransitionCGE:
                 'name': 'Natural Gas',
                 'description': 'Pipeline and LNG natural gas',
                 'co2_factor': 0.202,  # tCO2/MWh
-                'base_price_2021': 65,  # EUR/MWh
+                'base_price_2021': 44.6,  # EUR/MWh
                 'import_dependency': 0.95,  # 95% imported
                 'volatility': 'High'
             },
@@ -54,7 +54,7 @@ class RenewableTransitionCGE:
                 'name': 'Fossil Fuels',
                 'description': 'Oil products, coal, diesel, gasoline',
                 'co2_factor': 0.315,  # tCO2/MWh (weighted average)
-                'base_price_2021': 95,  # EUR/MWh
+                'base_price_2021': 55,  # EUR/MWh
                 'import_dependency': 0.92,  # 92% imported
                 'phase_out_target': 2050
             }

@@ -86,8 +86,8 @@ class CalibratedRecursiveCGE:
 
         self.total_household_income = sum(self.base_household_income.values())
 
-        # Population data (Italy 2021: ~59.13 million - actual figure)
-        self.base_population = 59.13  # million people
+        # Population data (Italy 2021: ~59.11 million - actual figure)
+        self.base_population = 59.11  # million people
 
         print(
             f"Base year GDP: €{self.base_gdp:,.0f} million (calibrated to actual Italy 2021)")
@@ -410,13 +410,13 @@ def run_calibrated_scenarios():
         },
         {
             'name': 'ets1',
-            'description': 'ETS1 - Power, Industry, Gas, Aviation & Maritime sectors',
-            'covered_sectors': ['Electricity', 'Industry', 'Other Energy', 'Gas', 'Air Transport', 'Water Transport']
+            'description': 'ETS1 - Power and Industry sectors',
+            'covered_sectors': ['Electricity', 'Industry', 'Other Energy']
         },
         {
             'name': 'ets2',
-            'description': 'ETS2 - Road and Other Transport sectors (from 2027)',
-            'covered_sectors': ['Road Transport', 'Other Transport']
+            'description': 'ETS2 - Transport sectors (from 2027)',
+            'covered_sectors': ['Road Transport', 'Rail Transport', 'Air Transport', 'Water Transport']
         }
     ]
 

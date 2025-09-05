@@ -1,5 +1,5 @@
-# main.py - CGE Main Execution with Pyomo Optimization
-import pyomo.environ as pyo
+# main.py - CGE Main Execution
+import scipy.optimize as opt
 import numpy as np
 import pandas as pd
 from pandas import Series
@@ -7,9 +7,9 @@ import matplotlib.pyplot as plt
 import json
 import os
 
-# Import Pyomo-based CGE modules
+# Import CGE modules
 from calibrate import model_data, parameters
-from clean_recursive_cge_pyomo import RecursivePyomoCGE
+from simpleCGE import solve_threeme_equilibrium, run_policy_simulation, extract_linking_variables
 import government as gov
 
 
@@ -31,7 +31,7 @@ def row_col_equal(sam):
         print("Row/column sums equal: PASSED")
 
 
-def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year=2025):
+def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year=2050):
     """
     Main CGE model runner with recursive dynamics and Pyomo optimization.
 
@@ -93,9 +93,9 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
     }
 
     # ETS sector definitions based on real EU ETS coverage
-    ets1_sectors = ['Electricity', 'Industry', 'Other Energy', 'Gas',
-                    'Air Transport', 'Water Transport']  # Power, industry, gas, aviation, maritime
-    ets2_sectors = ['Road Transport', 'Other Transport', 
+    ets1_sectors = ['Electricity', 'Industry', 'Other Energy',
+                    'Air Transport', 'Water Transport']  # Power, industry, aviation, maritime
+    ets2_sectors = ['Road Transport', 'Rail Transport', 'Other Transport', 
                     'Services']  # Remaining transport + commercial buildings from 2027
     
     # Household energy consumption patterns by ETS2 coverage with switching options
@@ -184,8 +184,7 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
         print(f"Institutional Agents: {len(institutions)}")
         print(f"ETS1 sectors (covered now): {ets1_sectors}")
         print(f"ETS2 sectors (from 2027): {ets2_sectors}")
-        print("Gas sector now in ETS1 for comprehensive energy system coverage")
-        print("Rail Transport removed from ETS2 (operates under non-ETS policies)")
+        print("Aviation & Maritime now in ETS1 for immediate carbon pricing")
         print(f"Household ETS2 exposure: {household_energy_impact['ets2_exposure']*100:.0f}% of energy consumption")
         print(f"Energy carriers with switching: {len(energy_carriers_switching)}")
         print("Dynamic fuel switching based on ETS costs and preferences enabled")
@@ -230,14 +229,14 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
             }
         },
         'ets1': {
-            'name': 'ETS1 - Power, Industry, Gas, Aviation & Maritime with Switching',
-            'description': 'EU ETS extension with comprehensive energy sector coverage and targeted fuel switching incentives',
+            'name': 'ETS1 - Power, Industry, Aviation & Maritime with Switching',
+            'description': 'EU ETS extension with targeted fuel switching incentives for covered sectors',
             'carbon_price_2021': 50,  # €/tCO2
             'carbon_price_growth': 0.05,  # 5% annual growth
             'ets_coverage': ets1_sectors,
             'emission_reduction_target': 0.55,  # 55% reduction by 2050
             'start_year': 2021,  # Already covered
-            'gas_sector_priority': True,  # Gas sector now included for comprehensive energy coverage
+            'aviation_maritime_priority': True,  # High-emission transport sectors
             'switching_policy': 'Targeted',
             'renewable_target_2050': 0.66,  # 66% renewable electricity
             'household_impact': {
@@ -266,13 +265,6 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
                     'storage_investment': 'High',
                     'switching_barriers_addressed': ['Grid modernization', 'Storage deployment']
                 },
-                'Gas': {
-                    'switching_speed': 'Medium',
-                    'target_renewable_share': 0.45,
-                    'biogas_potential': 0.25,
-                    'hydrogen_blending': 0.20,
-                    'switching_barriers_addressed': ['Infrastructure conversion', 'Supply diversification', 'Renewable gas production']
-                },
                 'Aviation': {
                     'switching_speed': 'Medium',
                     'sustainable_fuel_share': 0.40,
@@ -288,8 +280,8 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
             }
         },
         'ets2': {
-            'name': 'ETS2 - Road Transport & Buildings with Comprehensive Switching Support',
-            'description': 'EU ETS extension covering road transport and commercial buildings with comprehensive fuel switching support',
+            'name': 'ETS2 - Full Economy with Comprehensive Switching Support',
+            'description': 'EU ETS extension with comprehensive fuel switching support for all sectors and households',
             'carbon_price_2021': 25,  # €/tCO2 (starts in 2027)
             'carbon_price_2027': 40,  # €/tCO2 (starting price for transport/buildings)
             'carbon_price_growth': 0.08,  # 8% annual growth
@@ -393,35 +385,19 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
             print(f"  • Energy price increase: {household_impact['energy_price_increase']*100:.0f}%")
             print(f"  • Welfare impact: {household_impact['welfare_impact']*100:.0f}%")
 
-    # Use the Pyomo-based recursive dynamic CGE model
+    # Use the new recursive dynamic CGE model
     try:
-        from recursive_cge_pyomo import RecursivePyomoCGE
+        from recursive_cge_pyomo import RecursiveDynamicCGE
 
-        # Initialize the Pyomo-based dynamic CGE model
-        pyomo_cge_model = RecursivePyomoCGE(
-            sam_file="data/SAM.xlsx", 
-            base_year=2021, 
-            final_year=final_year,
-            solver='ipopt'  # Use IPOPT solver for nonlinear optimization
-        )
+        # Initialize the dynamic CGE model
+        cge_model = RecursiveDynamicCGE(
+            sam, base_year=2021, final_year=final_year)
 
-        # Set scenario-specific parameters
-        pyomo_cge_model.set_scenario_parameters(
-            scenario=scenario,
-            carbon_price_growth=selected_scenario.get('carbon_price_growth', 0.05),
-            emission_target=selected_scenario.get('emission_reduction_target', 0.5),
-            ets_sectors=selected_scenario.get('ets_coverage', [])
-        )
-
-        # Run the scenario with Pyomo optimization
+        # Run the scenario
         if verbose:
-            print(f"\nStarting Pyomo-based recursive dynamic simulation...")
+            print(f"\nStarting recursive dynamic simulation...")
 
-        results = pyomo_cge_model.solve_recursive_dynamic(
-            scenario_name=scenario,
-            save_results=True,
-            verbose=verbose
-        )
+        results = cge_model.run_scenario(scenario, save_results=True)
 
         if verbose and results:
             final_gdp = results['trajectories']['gdp'][-1] if results['trajectories']['gdp'] else 0
@@ -429,36 +405,24 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
             carbon_price = results['trajectories']['carbon_price'][-1] if results['trajectories']['carbon_price'] else 0
 
             print(f"\n{'='*50}")
-            print("PYOMO CGE SIMULATION RESULTS SUMMARY")
+            print("SIMULATION RESULTS SUMMARY")
             print(f"{'='*50}")
             print(f"Final Year GDP: €{final_gdp:,.0f} million")
             print(f"Final Emissions: {final_emissions:,.0f} tCO2")
             print(f"Final Carbon Price: €{carbon_price:.2f}/tCO2")
             print(f"Periods simulated: {len(results['periods'])}")
-            print(f"Optimization Status: {results.get('solver_status', 'Unknown')}")
 
         return results
 
     except Exception as e:
-        print(f"Error in Pyomo-based recursive dynamic model: {str(e)}")
-        print(f"Error details: {type(e).__name__}")
-        
-        # Create fallback results structure
-        results = {
-            'scenario': scenario,
-            'scenario_details': selected_scenario,
-            'model_type': 'Pyomo CGE (Error)',
-            'error': str(e),
-            'metadata': {
-                'run_date': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'final_year': final_year,
-                'base_year': 2021,
-                'regions': regions,
-                'sectors': ind,
-                'error_occurred': True
-            }
-        }
-        return results
+        print(f"Error in recursive dynamic model: {str(e)}")
+
+        # Fallback to original equilibrium solving
+        if verbose:
+            print("Falling back to static equilibrium model...")
+
+        equilibrium_results = solve_threeme_equilibrium(
+            d, p, ind, h, verbose=verbose)
 
         if verbose:
             print("Static equilibrium solved successfully!")
@@ -649,7 +613,7 @@ if __name__ == "__main__":
 
         try:
             results = runner(sam_path=sam_path, scenario=scenario,
-                             verbose=True, final_year=2025)
+                             verbose=True, final_year=2050)
 
             if results:
                 print(
