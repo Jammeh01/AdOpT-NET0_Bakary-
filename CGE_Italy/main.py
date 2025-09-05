@@ -92,41 +92,86 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
         'Islands': {'population_share': 0.114, 'energy_intensity': 0.75} # Islands
     }
 
-    # ETS sector definitions based on real EU ETS coverage
+    # ETS sector definitions based on real EU ETS coverage - ALIGNED WITH SAM ENERGY DISAGGREGATION
     ets1_sectors = ['Electricity', 'Industry', 'Gas', 'Other Energy',
                     'Air Transport', 'Water Transport']  # Power, industry, gas, aviation, maritime
     ets2_sectors = ['Road Transport', 'Other Transport', 
                     'Services']  # Road transport + commercial buildings from 2027
     non_ets_sectors = ['Agriculture', 'Rail Transport']  # Non-ETS sectors
     
-    # Household energy consumption patterns by ETS2 coverage with switching options
+    # SAM Energy Carrier Structure - Direct mapping from SAM disaggregation
+    sam_energy_carriers = {
+        'Electricity': {
+            'sam_value_2021': 49287,     # Million EUR from SAM
+            'carrier_type': 'Renewable Electricity',
+            'primary_fuel': 'Renewable sources',
+            'co2_intensity': 0.0,        # tCO2/MWh (treated as renewable)
+            'ets_coverage': False,       # Renewable electricity ETS exempt
+            'renewable_share': 0.42,     # 42% renewable in base year
+            'switching_potential': 'High',
+            'infrastructure': 'Grid modernization required'
+        },
+        'Gas': {
+            'sam_value_2021': 97895,     # Million EUR from SAM
+            'carrier_type': 'Natural Gas',
+            'primary_fuel': 'Natural gas + biogas',
+            'co2_intensity': 0.202,      # tCO2/MWh
+            'ets_coverage': True,        # Gas sector now in ETS1
+            'renewable_share': 0.05,     # 5% biogas/renewable gas
+            'switching_potential': 'Medium',
+            'infrastructure': 'Existing pipeline network'
+        },
+        'Other Energy': {
+            'sam_value_2021': 131924,    # Million EUR from SAM
+            'carrier_type': 'Fossil Fuels',
+            'primary_fuel': 'Oil, coal, petroleum products',
+            'co2_intensity': 0.315,      # tCO2/MWh
+            'ets_coverage': True,        # Fossil fuels in ETS1
+            'renewable_share': 0.02,     # 2% renewable (biofuels)
+            'switching_potential': 'Low',
+            'infrastructure': 'Existing but declining'
+        }
+    }
+    
+    # Calculate total energy carrier value and shares
+    total_energy_carrier_value = sum(carrier['sam_value_2021'] for carrier in sam_energy_carriers.values())
+    for carrier_name, carrier_data in sam_energy_carriers.items():
+        carrier_data['value_share'] = carrier_data['sam_value_2021'] / total_energy_carrier_value
+        carrier_data['sam_sector'] = carrier_name  # Direct mapping to SAM sector
+    
+    # Household energy consumption patterns by ETS2 coverage with switching options - SAM ALIGNED
     household_energy_impact = {
         'direct_consumption': 0.22,  # 22% of total energy consumption
         'transport_share': 0.45,     # 45% of household energy for transport
         'heating_share': 0.35,       # 35% for heating (affected by ETS2 fuel prices)
         'electricity_share': 0.20,   # 20% for appliances and electricity
         'ets2_exposure': 0.65,       # 65% of household energy affected by ETS2
-        'switching_preferences': {   # NEW: Fuel switching based on cost and preferences
+        'switching_preferences': {   # Fuel switching based on SAM energy carriers
             'transport': {
-                'current_mix': {'fossil': 0.85, 'gas': 0.10, 'renewable': 0.05},
-                'target_2050_bau': {'fossil': 0.65, 'gas': 0.15, 'renewable': 0.20},
-                'target_2050_ets2': {'fossil': 0.15, 'gas': 0.15, 'renewable': 0.70},
+                # Using SAM energy carrier structure: Other Energy (fossil), Gas, Electricity
+                'current_mix': {'Other Energy': 0.85, 'Gas': 0.10, 'Electricity': 0.05},
+                'target_2050_bau': {'Other Energy': 0.65, 'Gas': 0.15, 'Electricity': 0.20},
+                'target_2050_ets2': {'Other Energy': 0.15, 'Gas': 0.15, 'Electricity': 0.70},
                 'switching_elasticity': 0.8,  # High responsiveness to cost differences
                 'switching_barriers': ['Vehicle costs', 'Charging infrastructure', 'Range anxiety'],
-                'policy_support_needed': ['Purchase incentives', 'Charging network', 'Scrappage schemes']
+                'policy_support_needed': ['Purchase incentives', 'Charging network', 'Scrappage schemes'],
+                'sam_sector_mapping': {'Other Energy': 'Other Energy', 'Gas': 'Gas', 'Electricity': 'Electricity'}
             },
             'heating': {
-                'current_mix': {'fossil': 0.35, 'gas': 0.45, 'renewable': 0.20},
-                'target_2050_bau': {'fossil': 0.25, 'gas': 0.50, 'renewable': 0.25},
-                'target_2050_ets2': {'fossil': 0.05, 'gas': 0.25, 'renewable': 0.70},
+                # Using SAM energy carrier structure: Other Energy (fossil), Gas, Electricity
+                'current_mix': {'Other Energy': 0.35, 'Gas': 0.45, 'Electricity': 0.20},
+                'target_2050_bau': {'Other Energy': 0.25, 'Gas': 0.50, 'Electricity': 0.25},
+                'target_2050_ets2': {'Other Energy': 0.05, 'Gas': 0.25, 'Electricity': 0.70},
                 'switching_elasticity': 0.6,  # Medium responsiveness (retrofit barriers)
                 'switching_barriers': ['Upfront costs', 'Building characteristics', 'Heat pump efficiency'],
-                'policy_support_needed': ['Heat pump subsidies', 'Retrofit programs', 'Technical support']
+                'policy_support_needed': ['Heat pump subsidies', 'Retrofit programs', 'Technical support'],
+                'sam_sector_mapping': {'Other Energy': 'Other Energy', 'Gas': 'Gas', 'Electricity': 'Electricity'}
             },
             'electricity': {
-                'current_mix': {'fossil': 0.20, 'gas': 0.38, 'renewable': 0.42},
-                'target_2050_bau': {'fossil': 0.15, 'gas': 0.35, 'renewable': 0.50},
-                'target_2050_ets2': {'fossil': 0.02, 'gas': 0.15, 'renewable': 0.83},
+                # Grid-level energy mix using SAM energy carrier structure
+                'current_mix': {'Other Energy': 0.20, 'Gas': 0.38, 'Electricity': 0.42},
+                'target_2050_bau': {'Other Energy': 0.15, 'Gas': 0.35, 'Electricity': 0.50},
+                'target_2050_ets2': {'Other Energy': 0.02, 'Gas': 0.15, 'Electricity': 0.83},
                 'switching_elasticity': 0.9,  # Very high (grid-level switching)
                 'switching_barriers': ['Grid stability', 'Storage', 'Intermittency'],
                 'policy_support_needed': ['Grid modernization', 'Storage investment', 'Smart grid technology']
@@ -134,47 +179,55 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
         }
     }
     
-    # Energy carrier switching model with ETS-driven costs
+    # Energy carrier switching model with ETS-driven costs - ALIGNED WITH SAM STRUCTURE
     energy_carriers_switching = {
-        'Renewable Electricity': {
+        'Electricity': {  # SAM Electricity sector (renewable electricity)
             'base_price_2021': 85,      # EUR/MWh
-            'co2_factor': 0.0,          # tCO2/MWh
-            'ets_exempt': True,
+            'co2_factor': 0.0,          # tCO2/MWh (renewable electricity)
+            'ets_exempt': True,         # Renewable electricity exempt from ETS
+            'sam_sector': 'Electricity', # Direct mapping to SAM sector
             'switching_preference': 1.0,  # Highest preference
             'learning_rate': 0.08,       # 8% annual cost reduction
             'max_share_2050': 0.95,     # 95% technical potential
             'switching_speed': 'Fast',   # Quick adoption when cost-competitive
-            'infrastructure_req': 'High' # Grid modernization needed
+            'infrastructure_req': 'High', # Grid modernization needed
+            'current_sam_value': 49287   # Million EUR from SAM
         },
-        'Natural Gas': {
+        'Gas': {  # SAM Gas sector (natural gas carrier)
             'base_price_2021': 65,      # EUR/MWh
             'co2_factor': 0.202,        # tCO2/MWh
-            'ets_subject': True,
+            'ets_subject': True,        # Gas sector now in ETS1
+            'sam_sector': 'Gas',        # Direct mapping to SAM sector
             'switching_preference': 0.6,  # Medium preference (transition fuel)
             'learning_rate': 0.02,       # 2% annual cost change
             'max_share_2050': 0.40,     # Transition fuel role
             'switching_speed': 'Medium', # Moderate switching
-            'infrastructure_req': 'Low'  # Existing pipeline network
+            'infrastructure_req': 'Low',  # Existing pipeline network
+            'current_sam_value': 97895   # Million EUR from SAM
         },
-        'Fossil Fuels': {
+        'Other Energy': {  # SAM Other Energy sector (fossil fuels, oil products)
             'base_price_2021': 95,      # EUR/MWh
             'co2_factor': 0.315,        # tCO2/MWh
-            'ets_subject': True,
+            'ets_subject': True,        # Other Energy in ETS1
+            'sam_sector': 'Other Energy', # Direct mapping to SAM sector
             'switching_preference': 0.2,  # Low preference
             'learning_rate': -0.01,      # -1% (increasing costs)
             'max_share_2050': 0.05,     # Phase-out to 5%
             'switching_speed': 'Fast',   # Quick switching away when expensive
-            'infrastructure_req': 'Low'  # Existing but declining
+            'infrastructure_req': 'Low',  # Existing but declining
+            'current_sam_value': 131924  # Million EUR from SAM
         },
-        'Green Hydrogen': {
+        'Green Hydrogen': {  # Emerging carrier (not yet in SAM base year)
             'base_price_2021': 150,     # EUR/MWh (emerging)
             'co2_factor': 0.0,          # tCO2/MWh
             'ets_exempt': True,
+            'sam_sector': None,         # Not in base year SAM (emerging technology)
             'switching_preference': 0.8,  # High for hard-to-abate sectors
             'learning_rate': 0.12,       # 12% annual cost reduction
             'max_share_2050': 0.25,     # 25% potential
             'switching_speed': 'Slow',   # Technology development needed
-            'infrastructure_req': 'Very High' # New infrastructure needed
+            'infrastructure_req': 'Very High', # New infrastructure needed
+            'current_sam_value': 0       # Not in base year (emerging)
         }
     }
 
@@ -186,11 +239,41 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
         print(f"ETS1 sectors (covered now): {ets1_sectors}")
         print(f"ETS2 sectors (from 2027): {ets2_sectors}")
         print(f"Non-ETS sectors: {non_ets_sectors}")
-        print("Gas sector moved to ETS1 for direct carbon pricing")
-        print("Rail Transport moved to non-ETS category")
-        print(f"Household ETS2 exposure: {household_energy_impact['ets2_exposure']*100:.0f}% of energy consumption")
+        
+        print("\nSAM ENERGY CARRIER DISAGGREGATION:")
+        print("=" * 50)
+        for carrier, data in sam_energy_carriers.items():
+            ets_status = "ETS1" if data['ets_coverage'] else "ETS Exempt"
+            renewable_pct = data['renewable_share'] * 100
+            print(f"  • {carrier}:")
+            print(f"    - SAM Value: €{data['sam_value_2021']:,}M ({data['value_share']*100:.1f}% of energy)")
+            print(f"    - Type: {data['carrier_type']}")
+            print(f"    - ETS Status: {ets_status}")
+            print(f"    - Renewable Share: {renewable_pct:.0f}%")
+            print(f"    - CO2 Intensity: {data['co2_intensity']} tCO2/MWh")
+        
+        total_sam_energy = sum(data['sam_value_2021'] for data in sam_energy_carriers.values())
+        ets_covered_energy = sum(data['sam_value_2021'] for data in sam_energy_carriers.values() if data['ets_coverage'])
+        
+        print(f"\nENERGY CARRIER SUMMARY:")
+        print(f"  • Total Energy Carriers: €{total_sam_energy:,}M")
+        print(f"  • ETS1 Coverage: €{ets_covered_energy:,}M ({ets_covered_energy/total_sam_energy*100:.1f}%)")
+        print(f"  • Share of Economy: {total_sam_energy/4354546*100:.1f}%")
+        
+        print("\nTRANSPORT SECTOR DISAGGREGATION:")
+        transport_sectors = ['Road Transport', 'Rail Transport', 'Air Transport', 'Water Transport', 'Other Transport']
+        for sector in transport_sectors:
+            if sector in ets1_sectors:
+                status = "ETS1"
+            elif sector in ets2_sectors:
+                status = "ETS2" 
+            else:
+                status = "Non-ETS"
+            print(f"  • {sector}: {status}")
+        
+        print(f"\nHousehold ETS2 exposure: {household_energy_impact['ets2_exposure']*100:.0f}% of energy consumption")
         print(f"Energy carriers with switching: {len(energy_carriers_switching)}")
-        print("Dynamic fuel switching based on ETS costs and preferences enabled")
+        print("Dynamic fuel switching based on SAM energy carriers and ETS costs enabled")
 
     d = model_data(sam, h, ind, regions)
     p = parameters(d, ind)

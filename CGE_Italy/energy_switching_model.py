@@ -9,53 +9,59 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 def main():
-    print("ENHANCED ENERGY CARRIER SWITCHING MODEL")
+    print("SAM-ALIGNED ENERGY CARRIER SWITCHING MODEL")
     print("=" * 80)
-    print("Dynamic Fuel Switching Based on ETS Costs and Preferences")
+    print("Dynamic Fuel Switching Based on SAM Structure and ETS Costs")
     print("=" * 80)
     
-    # Define energy carriers with switching characteristics
-    print("\nENERGY CARRIERS WITH SWITCHING POTENTIAL:")
+    # Define energy carriers aligned with SAM structure
+    print("\nSAM ENERGY CARRIERS WITH SWITCHING POTENTIAL:")
     print("=" * 60)
     
     energy_carriers = {
-        'Renewable Electricity': {
+        'Electricity': {  # SAM Electricity sector
             'base_price_2021': 85,  # EUR/MWh
-            'co2_factor': 0.0,      # tCO2/MWh
+            'co2_factor': 0.0,      # tCO2/MWh (treated as renewable)
             'ets_exempt': True,
             'switching_preference': 1.0,  # Highest preference
-            'availability_2021': 0.42,   # 42% share
+            'availability_2021': 0.42,   # 42% renewable share in electricity
             'max_potential': 0.95,       # 95% max by 2050
             'learning_rate': 0.08,       # 8% annual cost reduction
             'infrastructure_req': 'High', # Grid modernization needed
             'switching_barriers': ['Grid stability', 'Storage', 'Intermittency'],
-            'switching_enablers': ['Cost competitiveness', 'Policy support', 'Technology maturity']
+            'switching_enablers': ['Cost competitiveness', 'Policy support', 'Technology maturity'],
+            'sam_sector': 'Electricity',
+            'sam_value_2021': 49287  # Million EUR from SAM
         },
-        'Natural Gas': {
+        'Gas': {  # SAM Gas sector
             'base_price_2021': 65,   # EUR/MWh
             'co2_factor': 0.202,     # tCO2/MWh
-            'ets_subject': True,
+            'ets_subject': True,     # Gas now in ETS1
             'switching_preference': 0.6,  # Medium preference (transition fuel)
-            'availability_2021': 0.35,   # 35% share
+            'availability_2021': 0.35,   # 35% share in energy mix
             'max_potential': 0.40,       # Can increase to 40% as transition
             'learning_rate': 0.02,       # 2% annual cost change
             'infrastructure_req': 'Medium', # Existing pipeline network
             'switching_barriers': ['Carbon costs', 'Import dependency'],
-            'switching_enablers': ['Existing infrastructure', 'Flexibility', 'Reliability']
+            'switching_enablers': ['Existing infrastructure', 'Flexibility', 'Reliability'],
+            'sam_sector': 'Gas',
+            'sam_value_2021': 97895  # Million EUR from SAM
         },
-        'Fossil Fuels': {
+        'Other Energy': {  # SAM Other Energy sector (fossil fuels)
             'base_price_2021': 95,   # EUR/MWh
             'co2_factor': 0.315,     # tCO2/MWh
-            'ets_subject': True,
+            'ets_subject': True,     # Other Energy in ETS1
             'switching_preference': 0.2,  # Low preference
             'availability_2021': 0.23,   # 23% share
             'max_potential': 0.05,       # Phase-out to 5% by 2050
             'learning_rate': -0.01,      # -1% (increasing costs)
             'infrastructure_req': 'Low',  # Existing infrastructure
             'switching_barriers': ['High carbon costs', 'Environmental concerns', 'Phase-out policies'],
-            'switching_enablers': ['Existing assets', 'Reliability', 'Energy security']
+            'switching_enablers': ['Existing assets', 'Reliability', 'Energy security'],
+            'sam_sector': 'Other Energy',
+            'sam_value_2021': 131924  # Million EUR from SAM
         },
-        'Green Hydrogen': {
+        'Green Hydrogen': {  # Emerging technology (not in base year SAM)
             'base_price_2021': 150,  # EUR/MWh (emerging)
             'co2_factor': 0.0,       # tCO2/MWh (when produced from renewables)
             'ets_exempt': True,
