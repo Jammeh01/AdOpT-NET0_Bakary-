@@ -1,5 +1,5 @@
-# main.py - CGE Main Execution
-import scipy.optimize as opt
+# main.py - CGE Main Execution with Pyomo Optimization
+import pyomo.environ as pyo
 import numpy as np
 import pandas as pd
 from pandas import Series
@@ -7,9 +7,9 @@ import matplotlib.pyplot as plt
 import json
 import os
 
-# Import CGE modules
+# Import Pyomo-based CGE modules
 from calibrate import model_data, parameters
-from simpleCGE import solve_threeme_equilibrium, run_policy_simulation, extract_linking_variables
+from clean_recursive_cge_pyomo import RecursivePyomoCGE
 import government as gov
 
 
@@ -31,7 +31,7 @@ def row_col_equal(sam):
         print("Row/column sums equal: PASSED")
 
 
-def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year=2050):
+def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year=2025):
     """
     Main CGE model runner with recursive dynamics and Pyomo optimization.
 
@@ -70,65 +70,299 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
         ind = [acc for acc in all_accounts if acc in [
             'Agriculture', 'Industry', 'Electricity', 'Gas', 'Other Energy',
             'Road Transport', 'Rail Transport', 'Air Transport', 'Water Transport',
-            'Other Transport', 'other Sectors (14)'
+            'Other Transport', 'Services'  # Changed from 'other Sectors (14)'
         ]]
     else:
         ind = ['Agriculture', 'Industry', 'Electricity', 'Gas', 'Other Energy',
                'Road Transport', 'Rail Transport', 'Air Transport', 'Water Transport',
-               'Other Transport', 'other Sectors (14)']
+               'Other Transport', 'Services']  # Changed from 'other Sectors (14)'
 
     h = ['Labour', 'Capital']
     regions = ['NW', 'NE', 'Centre', 'South', 'Islands']
+    
+    # Institutional agents (separate from economic sectors)
+    institutions = ['Households', 'Government', 'Investment', 'Rest_of_World']
+    
+    # Household regional structure for ETS2 impact analysis
+    household_regions = {
+        'NW': {'population_share': 0.261, 'energy_intensity': 1.05},    # North-West
+        'NE': {'population_share': 0.193, 'energy_intensity': 0.95},    # North-East  
+        'Centre': {'population_share': 0.198, 'energy_intensity': 1.02}, # Centre
+        'South': {'population_share': 0.234, 'energy_intensity': 0.88},  # South
+        'Islands': {'population_share': 0.114, 'energy_intensity': 0.75} # Islands
+    }
 
     # ETS sector definitions based on real EU ETS coverage
-    ets1_sectors = ['Electricity', 'Industry',
-                    'Other Energy']  # Power and industry
-    ets2_sectors = ['Road Transport', 'Rail Transport',
-                    'Air Transport', 'Water Transport']  # Transport from 2027
+    ets1_sectors = ['Electricity', 'Industry', 'Other Energy', 'Gas',
+                    'Air Transport', 'Water Transport']  # Power, industry, gas, aviation, maritime
+    ets2_sectors = ['Road Transport', 'Other Transport', 
+                    'Services']  # Remaining transport + commercial buildings from 2027
+    
+    # Household energy consumption patterns by ETS2 coverage with switching options
+    household_energy_impact = {
+        'direct_consumption': 0.22,  # 22% of total energy consumption
+        'transport_share': 0.45,     # 45% of household energy for transport
+        'heating_share': 0.35,       # 35% for heating (affected by ETS2 fuel prices)
+        'electricity_share': 0.20,   # 20% for appliances and electricity
+        'ets2_exposure': 0.65,       # 65% of household energy affected by ETS2
+        'switching_preferences': {   # NEW: Fuel switching based on cost and preferences
+            'transport': {
+                'current_mix': {'fossil': 0.85, 'gas': 0.10, 'renewable': 0.05},
+                'target_2050_bau': {'fossil': 0.65, 'gas': 0.15, 'renewable': 0.20},
+                'target_2050_ets2': {'fossil': 0.15, 'gas': 0.15, 'renewable': 0.70},
+                'switching_elasticity': 0.8,  # High responsiveness to cost differences
+                'switching_barriers': ['Vehicle costs', 'Charging infrastructure', 'Range anxiety'],
+                'policy_support_needed': ['Purchase incentives', 'Charging network', 'Scrappage schemes']
+            },
+            'heating': {
+                'current_mix': {'fossil': 0.35, 'gas': 0.45, 'renewable': 0.20},
+                'target_2050_bau': {'fossil': 0.25, 'gas': 0.50, 'renewable': 0.25},
+                'target_2050_ets2': {'fossil': 0.05, 'gas': 0.25, 'renewable': 0.70},
+                'switching_elasticity': 0.6,  # Medium responsiveness (retrofit barriers)
+                'switching_barriers': ['Upfront costs', 'Building characteristics', 'Heat pump efficiency'],
+                'policy_support_needed': ['Heat pump subsidies', 'Retrofit programs', 'Technical support']
+            },
+            'electricity': {
+                'current_mix': {'fossil': 0.20, 'gas': 0.38, 'renewable': 0.42},
+                'target_2050_bau': {'fossil': 0.15, 'gas': 0.35, 'renewable': 0.50},
+                'target_2050_ets2': {'fossil': 0.02, 'gas': 0.15, 'renewable': 0.83},
+                'switching_elasticity': 0.9,  # Very high (grid-level switching)
+                'switching_barriers': ['Grid stability', 'Storage', 'Intermittency'],
+                'policy_support_needed': ['Grid modernization', 'Storage investment', 'Smart grid technology']
+            }
+        }
+    }
+    
+    # Energy carrier switching model with ETS-driven costs
+    energy_carriers_switching = {
+        'Renewable Electricity': {
+            'base_price_2021': 85,      # EUR/MWh
+            'co2_factor': 0.0,          # tCO2/MWh
+            'ets_exempt': True,
+            'switching_preference': 1.0,  # Highest preference
+            'learning_rate': 0.08,       # 8% annual cost reduction
+            'max_share_2050': 0.95,     # 95% technical potential
+            'switching_speed': 'Fast',   # Quick adoption when cost-competitive
+            'infrastructure_req': 'High' # Grid modernization needed
+        },
+        'Natural Gas': {
+            'base_price_2021': 65,      # EUR/MWh
+            'co2_factor': 0.202,        # tCO2/MWh
+            'ets_subject': True,
+            'switching_preference': 0.6,  # Medium preference (transition fuel)
+            'learning_rate': 0.02,       # 2% annual cost change
+            'max_share_2050': 0.40,     # Transition fuel role
+            'switching_speed': 'Medium', # Moderate switching
+            'infrastructure_req': 'Low'  # Existing pipeline network
+        },
+        'Fossil Fuels': {
+            'base_price_2021': 95,      # EUR/MWh
+            'co2_factor': 0.315,        # tCO2/MWh
+            'ets_subject': True,
+            'switching_preference': 0.2,  # Low preference
+            'learning_rate': -0.01,      # -1% (increasing costs)
+            'max_share_2050': 0.05,     # Phase-out to 5%
+            'switching_speed': 'Fast',   # Quick switching away when expensive
+            'infrastructure_req': 'Low'  # Existing but declining
+        },
+        'Green Hydrogen': {
+            'base_price_2021': 150,     # EUR/MWh (emerging)
+            'co2_factor': 0.0,          # tCO2/MWh
+            'ets_exempt': True,
+            'switching_preference': 0.8,  # High for hard-to-abate sectors
+            'learning_rate': 0.12,       # 12% annual cost reduction
+            'max_share_2050': 0.25,     # 25% potential
+            'switching_speed': 'Slow',   # Technology development needed
+            'infrastructure_req': 'Very High' # New infrastructure needed
+        }
+    }
 
     # Initialize model
     if verbose:
         print("\nInitializing recursive dynamic CGE model...")
-        print(f"Sectors: {len(ind)}")
+        print(f"Economic Sectors: {len(ind)}")
+        print(f"Institutional Agents: {len(institutions)}")
         print(f"ETS1 sectors (covered now): {ets1_sectors}")
         print(f"ETS2 sectors (from 2027): {ets2_sectors}")
+        print("Gas sector now in ETS1 for comprehensive energy system coverage")
+        print("Rail Transport removed from ETS2 (operates under non-ETS policies)")
+        print(f"Household ETS2 exposure: {household_energy_impact['ets2_exposure']*100:.0f}% of energy consumption")
+        print(f"Energy carriers with switching: {len(energy_carriers_switching)}")
+        print("Dynamic fuel switching based on ETS costs and preferences enabled")
 
     d = model_data(sam, h, ind, regions)
     p = parameters(d, ind)
 
+    # Add switching parameters to model data
+    d.switching_preferences = household_energy_impact['switching_preferences']
+    d.energy_carriers = energy_carriers_switching
+    
     if verbose:
         print(f"Base year GDP: €{d.base_gdp:,.0f} million")
         print(f"Number of sectors: {len(ind)}")
         print(f"Number of regions: {len(regions)}")
+        print(f"Household final consumption: 58% of GDP")
+        print(f"Household energy consumption: 22% of total energy")
+        print("Fuel switching elasticities: Transport (0.8), Heating (0.6), Electricity (0.9)")
 
-    # Define the three new policy scenarios
+    # Define the three policy scenarios with household ETS2 impact and fuel switching
     policy_scenarios = {
         'business_as_usual': {
             'name': 'Business as Usual',
-            'description': 'Current policies continuation without additional climate measures',
+            'description': 'Current policies continuation with limited switching incentives',
             'carbon_price_2021': 25,  # €/tCO2
             'carbon_price_growth': 0.02,  # 2% annual growth
             'ets_coverage': [],  # No additional ETS coverage
-            'emission_reduction_target': 0.20  # 20% reduction by 2050
+            'emission_reduction_target': 0.20,  # 20% reduction by 2050
+            'switching_policy': 'Limited',
+            'renewable_target_2050': 0.50,  # 50% renewable electricity
+            'household_impact': {
+                'energy_price_increase': 0.15,  # 15% increase by 2050
+                'transport_cost_increase': 0.10,  # 10% increase
+                'heating_cost_increase': 0.12,   # 12% increase
+                'welfare_impact': -0.05,          # -5% welfare change
+                'switching_support': 'Minimal',
+                'fuel_switching': {
+                    'transport_electrification': 0.20,  # 20% by 2050
+                    'heating_electrification': 0.25,   # 25% by 2050
+                    'renewable_adoption': 0.50        # 50% grid renewable by 2050
+                }
+            }
         },
         'ets1': {
-            'name': 'ETS1 - Power and Industry',
-            'description': 'EU ETS extension to power and industry sectors with stronger carbon pricing',
+            'name': 'ETS1 - Power, Industry, Gas, Aviation & Maritime with Switching',
+            'description': 'EU ETS extension with comprehensive energy sector coverage and targeted fuel switching incentives',
             'carbon_price_2021': 50,  # €/tCO2
             'carbon_price_growth': 0.05,  # 5% annual growth
             'ets_coverage': ets1_sectors,
             'emission_reduction_target': 0.55,  # 55% reduction by 2050
-            'start_year': 2021  # Already covered
+            'start_year': 2021,  # Already covered
+            'gas_sector_priority': True,  # Gas sector now included for comprehensive energy coverage
+            'switching_policy': 'Targeted',
+            'renewable_target_2050': 0.66,  # 66% renewable electricity
+            'household_impact': {
+                'energy_price_increase': 0.25,  # 25% increase by 2050 (indirect)
+                'transport_cost_increase': 0.18,  # 18% increase (aviation fuel)
+                'heating_cost_increase': 0.22,   # 22% increase (electricity/gas)
+                'welfare_impact': -0.08,          # -8% welfare change
+                'adaptation_support': 0.15,       # 15% of carbon revenue for households
+                'switching_support': 'Moderate',
+                'fuel_switching': {
+                    'transport_electrification': 0.25,  # 25% by 2050 (indirect incentives)
+                    'heating_electrification': 0.35,   # 35% by 2050 (electricity price signals)
+                    'renewable_adoption': 0.66        # 66% grid renewable by 2050
+                }
+            },
+            'sectoral_switching': {
+                'Industry': {
+                    'switching_speed': 'Fast',
+                    'target_renewable_share': 0.60,
+                    'hydrogen_adoption': 0.15,
+                    'switching_barriers_addressed': ['Carbon pricing', 'Technology support']
+                },
+                'Electricity': {
+                    'switching_speed': 'Very Fast',
+                    'target_renewable_share': 0.80,
+                    'storage_investment': 'High',
+                    'switching_barriers_addressed': ['Grid modernization', 'Storage deployment']
+                },
+                'Gas': {
+                    'switching_speed': 'Medium',
+                    'target_renewable_share': 0.45,
+                    'biogas_potential': 0.25,
+                    'hydrogen_blending': 0.20,
+                    'switching_barriers_addressed': ['Infrastructure conversion', 'Supply diversification', 'Renewable gas production']
+                },
+                'Aviation': {
+                    'switching_speed': 'Medium',
+                    'sustainable_fuel_share': 0.40,
+                    'hydrogen_potential': 0.10,
+                    'switching_barriers_addressed': ['SAF production', 'Infrastructure development']
+                },
+                'Maritime': {
+                    'switching_speed': 'Medium',
+                    'green_fuel_share': 0.45,
+                    'hydrogen_ammonia_potential': 0.35,
+                    'switching_barriers_addressed': ['Fuel infrastructure', 'International coordination']
+                }
+            }
         },
         'ets2': {
-            'name': 'ETS2 - Transport Sectors',
-            'description': 'EU ETS extension to transport sectors starting 2027',
+            'name': 'ETS2 - Road Transport & Buildings with Comprehensive Switching Support',
+            'description': 'EU ETS extension covering road transport and commercial buildings with comprehensive fuel switching support',
             'carbon_price_2021': 25,  # €/tCO2 (starts in 2027)
-            'carbon_price_2027': 40,  # €/tCO2 (starting price for transport)
+            'carbon_price_2027': 40,  # €/tCO2 (starting price for transport/buildings)
             'carbon_price_growth': 0.08,  # 8% annual growth
             'ets_coverage': ets2_sectors,
-            'emission_reduction_target': 0.42,  # 42% reduction by 2050
-            'start_year': 2027  # Transport ETS starts in 2027
+            'emission_reduction_target': 0.65,  # 65% reduction by 2050
+            'start_year': 2027,  # Transport & buildings ETS starts in 2027
+            'household_direct_coverage': True,  # NEW: Households directly affected
+            'switching_policy': 'Comprehensive',
+            'renewable_target_2050': 0.83,  # 83% renewable electricity
+            'household_impact': {
+                # Direct ETS2 coverage of household energy consumption with switching support
+                'energy_price_increase': 0.45,   # 45% increase by 2050 (direct ETS2)
+                'transport_cost_increase': 0.65,  # 65% increase (road transport ETS2)
+                'heating_cost_increase': 0.55,   # 55% increase (building fuels ETS2)
+                'welfare_impact': -0.18,          # -18% welfare change initially
+                'welfare_recovery': 0.12,         # +12% recovery through adaptation
+                'switching_support': 'Comprehensive',
+                'adaptation_measures': {
+                    'energy_efficiency_subsidies': 0.25,    # 25% of carbon revenue
+                    'transport_electrification_support': 0.20, # 20% of carbon revenue
+                    'heat_pump_incentives': 0.15,          # 15% of carbon revenue
+                    'low_income_protection': 0.10          # 10% for vulnerable households
+                },
+                'behavioral_responses': {
+                    'energy_efficiency_improvement': 0.35,  # 35% efficiency gain
+                    'transport_modal_shift': 0.28,         # 28% shift to public/active transport
+                    'heating_electrification': 0.42,       # 42% switch to heat pumps
+                    'renewable_adoption': 0.55             # 55% household renewable adoption
+                },
+                'fuel_switching': {
+                    'transport_electrification': 0.70,  # 70% by 2050 (direct ETS2 + support)
+                    'heating_electrification': 0.70,   # 70% by 2050 (heat pumps + support)
+                    'renewable_adoption': 0.83        # 83% grid renewable by 2050
+                },
+                'switching_timeline': {
+                    'phase_in_period': 3,      # 3-year phase-in (2027-2030)
+                    'full_impact_year': 2030,  # Full ETS2 impact from 2030
+                    'adaptation_lag': 5,       # 5-year household adaptation period
+                    'switching_acceleration': 2035  # Accelerated switching post-adaptation
+                },
+                'regional_variation': household_regions,
+                'temporal_dynamics': {
+                    'phase_in_period': 3,      # 3-year phase-in (2027-2030)
+                    'full_impact_year': 2030,  # Full ETS2 impact from 2030
+                    'adaptation_lag': 5        # 5-year household adaptation period
+                }
+            },
+            'sectoral_switching': {
+                'Road Transport': {
+                    'switching_speed': 'Very Fast',
+                    'electrification_target': 0.75,
+                    'hydrogen_potential': 0.15,
+                    'switching_barriers_addressed': ['Purchase incentives', 'Charging infrastructure', 'Total cost of ownership']
+                },
+                'Rail Transport': {
+                    'switching_speed': 'Fast',
+                    'electrification_target': 0.90,
+                    'hydrogen_potential': 0.10,
+                    'switching_barriers_addressed': ['Grid connection', 'Infrastructure upgrade']
+                },
+                'Services': {
+                    'switching_speed': 'Medium',
+                    'electrification_target': 0.65,
+                    'heat_pump_adoption': 0.55,
+                    'switching_barriers_addressed': ['Building retrofits', 'Technology support', 'Financing']
+                },
+                'Households': {
+                    'switching_speed': 'Medium',
+                    'transport_electrification': 0.70,
+                    'heating_electrification': 0.70,
+                    'switching_barriers_addressed': ['Purchase incentives', 'Retrofit support', 'Technical assistance']
+                }
+            }
         }
     }
 
@@ -142,20 +376,52 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
             print(f"ETS covered sectors: {selected_scenario['ets_coverage']}")
         if selected_scenario.get('start_year'):
             print(f"ETS start year: {selected_scenario['start_year']}")
+        if selected_scenario.get('household_direct_coverage'):
+            print("HOUSEHOLD DIRECT COVERAGE ENABLED:")
+            household_impact = selected_scenario['household_impact']
+            print(f"  • Energy price increase: {household_impact['energy_price_increase']*100:.0f}%")
+            print(f"  • Transport cost increase: {household_impact['transport_cost_increase']*100:.0f}%")
+            print(f"  • Heating cost increase: {household_impact['heating_cost_increase']*100:.0f}%")
+            print(f"  • Initial welfare impact: {household_impact['welfare_impact']*100:.0f}%")
+            print(f"  • Welfare recovery: {household_impact['welfare_recovery']*100:.0f}%")
+            print(f"  • Adaptation measures: {len(household_impact['adaptation_measures'])} programs")
+            print(f"  • Behavioral responses: {len(household_impact['behavioral_responses'])} types")
+            print(f"  • Regional coverage: {len(household_impact['regional_variation'])} NUTS-1 regions")
+        elif selected_scenario.get('household_impact'):
+            print("Household indirect impact included")
+            household_impact = selected_scenario['household_impact']
+            print(f"  • Energy price increase: {household_impact['energy_price_increase']*100:.0f}%")
+            print(f"  • Welfare impact: {household_impact['welfare_impact']*100:.0f}%")
 
-    # Use the new recursive dynamic CGE model
+    # Use the Pyomo-based recursive dynamic CGE model
     try:
-        from recursive_cge_pyomo import RecursiveDynamicCGE
+        from recursive_cge_pyomo import RecursivePyomoCGE
 
-        # Initialize the dynamic CGE model
-        cge_model = RecursiveDynamicCGE(
-            sam, base_year=2021, final_year=final_year)
+        # Initialize the Pyomo-based dynamic CGE model
+        pyomo_cge_model = RecursivePyomoCGE(
+            sam_file="data/SAM.xlsx", 
+            base_year=2021, 
+            final_year=final_year,
+            solver='ipopt'  # Use IPOPT solver for nonlinear optimization
+        )
 
-        # Run the scenario
+        # Set scenario-specific parameters
+        pyomo_cge_model.set_scenario_parameters(
+            scenario=scenario,
+            carbon_price_growth=selected_scenario.get('carbon_price_growth', 0.05),
+            emission_target=selected_scenario.get('emission_reduction_target', 0.5),
+            ets_sectors=selected_scenario.get('ets_coverage', [])
+        )
+
+        # Run the scenario with Pyomo optimization
         if verbose:
-            print(f"\nStarting recursive dynamic simulation...")
+            print(f"\nStarting Pyomo-based recursive dynamic simulation...")
 
-        results = cge_model.run_scenario(scenario, save_results=True)
+        results = pyomo_cge_model.solve_recursive_dynamic(
+            scenario_name=scenario,
+            save_results=True,
+            verbose=verbose
+        )
 
         if verbose and results:
             final_gdp = results['trajectories']['gdp'][-1] if results['trajectories']['gdp'] else 0
@@ -163,24 +429,36 @@ def runner(sam_path=None, scenario='business_as_usual', verbose=True, final_year
             carbon_price = results['trajectories']['carbon_price'][-1] if results['trajectories']['carbon_price'] else 0
 
             print(f"\n{'='*50}")
-            print("SIMULATION RESULTS SUMMARY")
+            print("PYOMO CGE SIMULATION RESULTS SUMMARY")
             print(f"{'='*50}")
             print(f"Final Year GDP: €{final_gdp:,.0f} million")
             print(f"Final Emissions: {final_emissions:,.0f} tCO2")
             print(f"Final Carbon Price: €{carbon_price:.2f}/tCO2")
             print(f"Periods simulated: {len(results['periods'])}")
+            print(f"Optimization Status: {results.get('solver_status', 'Unknown')}")
 
         return results
 
     except Exception as e:
-        print(f"Error in recursive dynamic model: {str(e)}")
-
-        # Fallback to original equilibrium solving
-        if verbose:
-            print("Falling back to static equilibrium model...")
-
-        equilibrium_results = solve_threeme_equilibrium(
-            d, p, ind, h, verbose=verbose)
+        print(f"Error in Pyomo-based recursive dynamic model: {str(e)}")
+        print(f"Error details: {type(e).__name__}")
+        
+        # Create fallback results structure
+        results = {
+            'scenario': scenario,
+            'scenario_details': selected_scenario,
+            'model_type': 'Pyomo CGE (Error)',
+            'error': str(e),
+            'metadata': {
+                'run_date': pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'final_year': final_year,
+                'base_year': 2021,
+                'regions': regions,
+                'sectors': ind,
+                'error_occurred': True
+            }
+        }
+        return results
 
         if verbose:
             print("Static equilibrium solved successfully!")
@@ -371,16 +649,16 @@ if __name__ == "__main__":
 
         try:
             results = runner(sam_path=sam_path, scenario=scenario,
-                             verbose=True, final_year=2050)
+                             verbose=True, final_year=2025)
 
             if results:
                 print(
-                    f"✓ {scenario.upper().replace('_', ' ')} scenario completed successfully!")
+                    f" {scenario.upper().replace('_', ' ')} scenario completed successfully!")
             else:
-                print(f"✗ {scenario.upper().replace('_', ' ')} scenario failed!")
+                print(f" {scenario.upper().replace('_', ' ')} scenario failed!")
 
         except Exception as e:
-            print(f"✗ Error running {scenario} scenario: {str(e)}")
+            print(f" Error running {scenario} scenario: {str(e)}")
             import traceback
             traceback.print_exc()
 

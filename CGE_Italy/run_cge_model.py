@@ -59,12 +59,12 @@ def main():
 
             if results:
                 print(
-                    f"✓ {scenario.capitalize()} scenario completed successfully!")
+                    f" {scenario.capitalize()} scenario completed successfully!")
             else:
-                print(f"✗ {scenario.capitalize()} scenario failed!")
+                print(f" {scenario.capitalize()} scenario failed!")
 
         except Exception as e:
-            print(f"✗ Error running {scenario} scenario: {str(e)}")
+            print(f" Error running {scenario} scenario: {str(e)}")
             import traceback
             traceback.print_exc()
 

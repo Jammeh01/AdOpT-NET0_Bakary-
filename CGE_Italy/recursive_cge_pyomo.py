@@ -4,24 +4,35 @@ import numpy as np
 import pandas as pd
 from pandas import Series, DataFrame
 import os
+import json
 from datetime import datetime
 
 
-class RecursiveDynamicCGE:
+class RecursivePyomoCGE:
     """
     Recursive Dynamic CGE Model for Italy using Pyomo optimization
 
     This model implements a recursive dynamic approach where:
-    - Each period is solved sequentially
+    - Each period is solved sequentially using Pyomo
     - Investment decisions in period t affect capital stock in t+1
     - ETS policies are implemented with sector-specific coverage
+    - All equilibrium conditions solved as optimization problem
     """
 
-    def __init__(self, sam_data, base_year=2021, final_year=2050):
-        self.sam = sam_data
+    def __init__(self, sam_file=None, sam_data=None, base_year=2021, final_year=2050, solver='ipopt'):
+        # Load SAM data
+        if sam_file:
+            self.sam = pd.read_excel(sam_file, index_col=0, header=0)
+        elif sam_data is not None:
+            self.sam = sam_data
+        else:
+            raise ValueError("Must provide either sam_file or sam_data")
+            
+        self.sam_file = sam_file
         self.base_year = base_year
         self.final_year = final_year
         self.periods = list(range(base_year, final_year + 1))
+        self.solver_name = solver
 
         # Define sectors from SAM
         self.sectors = ['Agriculture', 'Industry', 'Electricity', 'Gas', 'Other Energy',
@@ -35,10 +46,9 @@ class RecursiveDynamicCGE:
         self.regions = ['NW', 'NE', 'Centre', 'South', 'Islands']
 
         # ETS sector coverage
-        self.ets1_sectors = ['Electricity', 'Industry',
-                             'Other Energy']  # EU ETS Phase 1 sectors
-        self.ets2_sectors = ['Road Transport', 'Rail Transport',
-                             'Air Transport', 'Water Transport']  # Transport sectors from 2027
+        self.ets1_sectors = ['Electricity', 'Industry', 'Other Energy', 'Gas',
+                             'Air Transport', 'Water Transport']  # EU ETS Phase 1 sectors + Gas + Aviation/Maritime
+        self.ets2_sectors = ['Road Transport', 'Other Transport']  # Transport sectors from 2027 (Rail removed)
 
         # Initialize model parameters
         self.initialize_parameters()
@@ -92,6 +102,217 @@ class RecursiveDynamicCGE:
 
         print("Model parameters initialized successfully")
 
+    def set_scenario_parameters(self, scenario, carbon_price_growth=0.05, emission_target=0.5, ets_sectors=None):
+        """Set scenario-specific parameters for the model"""
+        self.scenario = scenario
+        self.carbon_price_growth = carbon_price_growth
+        self.emission_target = emission_target
+        self.current_ets_sectors = ets_sectors or []
+        
+        # Set initial carbon price based on scenario
+        if scenario == 'business_as_usual':
+            self.base_carbon_price = 25
+        elif scenario == 'ets1':
+            self.base_carbon_price = 50
+        elif scenario == 'ets2':
+            self.base_carbon_price = 40
+        else:
+            self.base_carbon_price = 30
+            
+        print(f"Scenario parameters set: {scenario}, Base carbon price: €{self.base_carbon_price}/tCO2")
+
+    def solve_recursive_dynamic(self, scenario_name, save_results=True, verbose=True):
+        """
+        Solve the recursive dynamic CGE model using Pyomo
+        
+        Returns:
+            dict: Complete simulation results
+        """
+        if verbose:
+            print(f"Starting recursive dynamic solution for scenario: {scenario_name}")
+            
+        # Initialize results storage
+        all_results = {
+            'scenario': scenario_name,
+            'periods': [],
+            'trajectories': {
+                'gdp': [],
+                'total_emissions': [],
+                'carbon_price': [],
+                'sectoral_output': {sector: [] for sector in self.sectors},
+                'energy_prices': {'Electricity': [], 'Gas': []},
+                'regional_consumption': {region: [] for region in self.regions}
+            },
+            'solver_status': 'Unknown',
+            'metadata': {
+                'run_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'base_year': self.base_year,
+                'final_year': self.final_year
+            }
+        }
+        
+        # Initialize capital stock
+        current_capital = {sector: self.base_output[sector] * 2.5 for sector in self.sectors}
+        
+        # Solve each period sequentially
+        for year in self.periods:
+            if verbose and year % 5 == 0:
+                print(f"Solving year {year}...")
+                
+            # Create and solve period model
+            period_results = self.solve_single_period_pyomo(year, current_capital, verbose=(year % 10 == 0))
+            
+            if period_results['solved']:
+                # Store results
+                all_results['periods'].append(year)
+                all_results['trajectories']['gdp'].append(period_results['gdp'])
+                all_results['trajectories']['total_emissions'].append(period_results['total_emissions'])
+                all_results['trajectories']['carbon_price'].append(period_results['carbon_price'])
+                
+                # Store sectoral outputs
+                for sector in self.sectors:
+                    all_results['trajectories']['sectoral_output'][sector].append(
+                        period_results['output'].get(sector, 0))
+                
+                # Store energy prices
+                all_results['trajectories']['energy_prices']['Electricity'].append(
+                    period_results.get('electricity_price', 85))
+                all_results['trajectories']['energy_prices']['Gas'].append(
+                    period_results.get('gas_price', 65))
+                
+                # Update capital for next period
+                for sector in self.sectors:
+                    investment = period_results['investment'].get(sector, current_capital[sector] * 0.1)
+                    current_capital[sector] = current_capital[sector] * (1 - self.capital_depreciation) + investment
+                    
+                all_results['solver_status'] = 'Optimal'
+            else:
+                if verbose:
+                    print(f"Failed to solve year {year}")
+                all_results['solver_status'] = 'Failed'
+                break
+        
+        if verbose:
+            print(f"Recursive solution completed. Status: {all_results['solver_status']}")
+            
+        if save_results:
+            self.save_results(all_results, scenario_name)
+            
+        return all_results
+
+    def solve_single_period_pyomo(self, year, capital_stock, verbose=False):
+        """Solve a single period using Pyomo optimization"""
+        try:
+            # Create period model
+            model = self.create_pyomo_model(year, capital_stock)
+            
+            # Set up solver
+            solver = pyo.SolverFactory(self.solver_name)
+            if self.solver_name == 'ipopt':
+                solver.options['max_iter'] = 3000
+                solver.options['tol'] = 1e-6
+                
+            # Solve the model
+            results = solver.solve(model, tee=verbose)
+            
+            # Check if solution was found
+            if (results.solver.termination_condition == pyo.TerminationCondition.optimal):
+                # Extract results
+                period_results = self.extract_period_results(model, year)
+                period_results['solved'] = True
+                return period_results
+            else:
+                if verbose:
+                    print(f"Solver failed for year {year}: {results.solver.termination_condition}")
+                return {'solved': False, 'year': year}
+                
+        except Exception as e:
+            if verbose:
+                print(f"Error solving year {year}: {str(e)}")
+            return {'solved': False, 'year': year, 'error': str(e)}
+
+    def extract_period_results(self, model, year):
+        """Extract results from solved Pyomo model"""
+        results = {
+            'year': year,
+            'gdp': 0,
+            'total_emissions': 0,
+            'carbon_price': self.base_carbon_price * ((1 + self.carbon_price_growth) ** (year - self.base_year)),
+            'output': {},
+            'consumption': {},
+            'investment': {},
+            'employment': {},
+            'electricity_price': 85,  # Base price in EUR/MWh
+            'gas_price': 65  # Base price in EUR/MWh
+        }
+        
+        # Extract sectoral outputs and sum for GDP
+        total_output = 0
+        for sector in self.sectors:
+            if hasattr(model, 'output') and sector in model.output:
+                try:
+                    output_val = pyo.value(model.output[sector])
+                    results['output'][sector] = output_val if output_val is not None else self.base_output[sector]
+                except:
+                    results['output'][sector] = self.base_output[sector]
+            else:
+                results['output'][sector] = self.base_output[sector]
+            
+            total_output += results['output'][sector]
+            
+        results['gdp'] = total_output
+        
+        # Calculate emissions
+        total_emissions = 0
+        for sector in self.sectors:
+            sector_emissions = results['output'][sector] * self.carbon_intensity[sector]
+            total_emissions += sector_emissions
+            
+        results['total_emissions'] = total_emissions
+        
+        # Extract other variables if they exist
+        for sector in self.sectors:
+            results['consumption'][sector] = results['output'][sector] * 0.6  # Simplified
+            results['investment'][sector] = results['output'][sector] * 0.2   # Simplified
+            results['employment'][sector] = results['output'][sector] * 0.015  # Jobs per million EUR
+            
+        return results
+
+    def save_results(self, results, scenario_name):
+        """Save results to files"""
+        try:
+            results_dir = "results"
+            os.makedirs(results_dir, exist_ok=True)
+            
+            # Save main results as JSON
+            results_file = os.path.join(results_dir, f"pyomo_cge_results_{scenario_name}.json")
+            
+            # Convert numpy arrays to lists for JSON serialization
+            json_results = {}
+            for key, value in results.items():
+                if isinstance(value, dict):
+                    json_results[key] = {}
+                    for sub_key, sub_value in value.items():
+                        if isinstance(sub_value, (list, np.ndarray)):
+                            json_results[key][sub_key] = [float(x) if isinstance(x, (int, float, np.number)) else x for x in sub_value]
+                        else:
+                            json_results[key][sub_key] = sub_value
+                elif isinstance(value, (list, np.ndarray)):
+                    json_results[key] = [float(x) if isinstance(x, (int, float, np.number)) else x for x in value]
+                else:
+                    json_results[key] = value
+            
+            with open(results_file, 'w') as f:
+                import json
+                json.dump(json_results, f, indent=2)
+            
+            print(f"Results saved to {results_file}")
+            
+        except Exception as e:
+            print(f"Error saving results: {str(e)}")
+
+        print("Model parameters initialized successfully")
+
     def create_pyomo_model(self, period, previous_capital=None):
         """
         Create Pyomo model for a single period
@@ -113,11 +334,11 @@ class RecursiveDynamicCGE:
 
         # Variables
         model.output = pyo.Var(
-            model.sectors, domain=pyo.NonNegativeReals, bounds=(1, 1e6))
+            model.sectors, domain=pyo.NonNegativeReals, bounds=(100, 1e6))
         model.consumption = pyo.Var(
-            model.sectors, domain=pyo.NonNegativeReals, bounds=(1, 1e6))
+            model.sectors, domain=pyo.NonNegativeReals, bounds=(100, 1e6))
         model.investment = pyo.Var(
-            model.sectors, domain=pyo.NonNegativeReals, bounds=(1, 1e6))
+            model.sectors, domain=pyo.NonNegativeReals, bounds=(10, 1e6))
         model.exports = pyo.Var(
             model.sectors, domain=pyo.NonNegativeReals, bounds=(0, 1e6))
         model.imports = pyo.Var(
@@ -125,39 +346,99 @@ class RecursiveDynamicCGE:
 
         # Prices
         model.price = pyo.Var(
-            model.sectors, domain=pyo.NonNegativeReals, bounds=(0.1, 10))
+            model.sectors, domain=pyo.NonNegativeReals, bounds=(0.5, 5))
         model.carbon_price = pyo.Var(
             domain=pyo.NonNegativeReals, bounds=(0, 500))
 
         # Capital stock
         model.capital_stock = pyo.Var(
-            model.sectors, domain=pyo.NonNegativeReals, bounds=(10, 1e7))
+            model.sectors, domain=pyo.NonNegativeReals, bounds=(1000, 1e7))
 
         # Labor allocation
         model.labor = pyo.Var(
-            model.sectors, domain=pyo.NonNegativeReals, bounds=(1, 1e6))
+            model.sectors, domain=pyo.NonNegativeReals, bounds=(100, 1e6))
 
         # Carbon emissions
         model.emissions = pyo.Var(
             model.sectors, domain=pyo.NonNegativeReals, bounds=(0, 1e6))
 
         # GDP components
-        model.gdp = pyo.Var(domain=pyo.NonNegativeReals, bounds=(100000, 1e7))
+        model.gdp = pyo.Var(domain=pyo.NonNegativeReals, bounds=(1000000, 1e7))
 
-        # Initialize variables with base year values (ensure no zeros)
+        # Initialize variables with base year values
         for sector in self.sectors:
-            # Ensure minimum value
-            base_val = max(self.base_output[sector], 100)
+            base_val = max(self.base_output[sector], 1000)
             model.output[sector].set_value(base_val)
             model.consumption[sector].set_value(base_val * 0.6)
             model.investment[sector].set_value(base_val * 0.2)
             model.price[sector].set_value(1.0)
             model.capital_stock[sector].set_value(base_val * 3)
             model.labor[sector].set_value(base_val * 0.3)
-            model.emissions[sector].set_value(
-                self.carbon_intensity[sector] * base_val)
+            model.emissions[sector].set_value(self.carbon_intensity[sector] * base_val)
+
+        # Set carbon price
+        carbon_price_val = self.base_carbon_price * ((1 + self.carbon_price_growth) ** (period - self.base_year))
+        model.carbon_price.set_value(carbon_price_val)
+
+        # Add constraints
+        self.add_constraints(model, period)
+
+        # Set objective function (maximize social welfare = weighted consumption)
+        def objective_rule(model):
+            return sum(model.consumption[s] for s in model.sectors) - 0.001 * sum(model.emissions[s] for s in model.sectors)
+
+        model.objective = pyo.Objective(rule=objective_rule, sense=pyo.maximize)
 
         return model
+
+    def add_constraints(self, model, period):
+        """Add economic constraints to the model"""
+
+        # GDP accounting identity
+        def gdp_rule(model):
+            return model.gdp == sum(model.output[s] for s in model.sectors)
+        model.gdp_constraint = pyo.Constraint(rule=gdp_rule)
+
+        # Resource balance for each sector
+        def resource_balance_rule(model, s):
+            return model.output[s] + model.imports[s] >= model.consumption[s] + model.investment[s] + model.exports[s]
+        model.resource_balance = pyo.Constraint(model.sectors, rule=resource_balance_rule)
+
+        # Labor constraint (total labor is fixed)
+        def labor_constraint_rule(model):
+            total_labor = sum(self.base_employment[s] for s in self.sectors)
+            return sum(model.labor[s] for s in model.sectors) <= total_labor * 1.1  # Allow 10% flexibility
+        model.labor_constraint = pyo.Constraint(rule=labor_constraint_rule)
+
+        # Capital constraint for each sector
+        def capital_constraint_rule(model, s):
+            base_capital = max(self.base_output[s] * 3, 1000)  # Capital-output ratio of 3
+            return model.capital_stock[s] >= base_capital * 0.8  # Allow 20% reduction
+        model.capital_constraint = pyo.Constraint(model.sectors, rule=capital_constraint_rule)
+
+        # Simple production relationship (linear approximation)
+        def production_rule(model, s):
+            # Simple linear production function: Y = a*K + b*L
+            capital_coeff = 0.3
+            labor_coeff = 0.7
+            base_prod = max(self.base_output[s], 1000)
+            return model.output[s] <= base_prod * (
+                1 + capital_coeff * (model.capital_stock[s] / (base_prod * 3) - 1) +
+                labor_coeff * (model.labor[s] / (base_prod * 0.3) - 1)
+            )
+        model.production_constraint = pyo.Constraint(model.sectors, rule=production_rule)
+
+        # Emissions constraint
+        def emissions_rule(model, s):
+            return model.emissions[s] == self.carbon_intensity[s] * model.output[s]
+        model.emissions_constraint = pyo.Constraint(model.sectors, rule=emissions_rule)
+
+        # Price constraints (simple cost-plus pricing)
+        def price_rule(model, s):
+            base_cost = 1.0
+            carbon_cost = model.carbon_price * self.carbon_intensity[s] if s in self.current_ets_sectors else 0
+            return model.price[s] >= base_cost + carbon_cost * 0.001  # Scale carbon cost
+        model.price_constraint = pyo.Constraint(model.sectors, rule=price_rule)
 
     def add_constraints(self, model, period, scenario):
         """Add economic constraints to the model"""
@@ -332,7 +613,7 @@ class RecursiveDynamicCGE:
 
             if (solver_result.solver.termination_condition == pyo.TerminationCondition.optimal or
                     solver_result.solver.termination_condition == pyo.TerminationCondition.feasible):
-                print(f"✓ Period {period} solved successfully")
+                print(f" Period {period} solved successfully")
 
                 # Extract results with error handling
                 results = {
@@ -391,11 +672,11 @@ class RecursiveDynamicCGE:
 
             else:
                 print(
-                    f"✗ Period {period} failed to solve: {solver_result.solver.termination_condition}")
+                    f" Period {period} failed to solve: {solver_result.solver.termination_condition}")
                 return self.create_fallback_results(period, scenario)
 
         except Exception as e:
-            print(f"✗ Error solving period {period}: {str(e)}")
+            print(f" Error solving period {period}: {str(e)}")
             return self.create_fallback_results(period, scenario)
 
     def run_scenario(self, scenario, save_results=True):
@@ -488,7 +769,7 @@ class RecursiveDynamicCGE:
             # Store for next period
             previous_results = period_results
 
-        print(f"\n✓ Scenario {scenario} completed successfully!")
+        print(f"\n Scenario {scenario} completed successfully!")
         print(f"Periods solved: {len(all_results['periods'])}")
 
         if save_results:
@@ -555,7 +836,7 @@ class RecursiveDynamicCGE:
         results['total_emissions'] = total_emissions
         results['welfare'] = sum(results['consumption'].values())
 
-        print(f"✓ Period {period} solved with fallback method")
+        print(f" Period {period} solved with fallback method")
         return results
 
     def solve_linear_approximation(self, model, period, scenario):
@@ -771,7 +1052,7 @@ def run_all_scenarios():
         sam_data = pd.DataFrame()
 
     # Initialize CGE model
-    cge_model = RecursiveDynamicCGE(sam_data, base_year=2021, final_year=2050)
+    cge_model = RecursivePyomoCGE(sam_data, base_year=2021, final_year=2050)
 
     scenarios = ['business_as_usual', 'ets1', 'ets2']
     scenario_results = {}
@@ -784,9 +1065,9 @@ def run_all_scenarios():
         try:
             results = cge_model.run_scenario(scenario, save_results=True)
             scenario_results[scenario] = results
-            print(f"✓ {scenario.upper()} completed successfully")
+            print(f" {scenario.upper()} completed successfully")
         except Exception as e:
-            print(f"✗ Error in {scenario}: {str(e)}")
+            print(f" Error in {scenario}: {str(e)}")
             import traceback
             traceback.print_exc()
 

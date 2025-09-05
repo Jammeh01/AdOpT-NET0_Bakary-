@@ -33,10 +33,10 @@ def run_single_scenario(scenario='business_as_usual', final_year=2050):
 
         if results:
             print(
-                f"✓ {scenario.capitalize().replace('_', ' ')} scenario completed successfully!")
+                f" {scenario.capitalize().replace('_', ' ')} scenario completed successfully!")
             return True
         else:
-            print(f"✗ {scenario.capitalize().replace('_', ' ')} scenario failed!")
+            print(f" {scenario.capitalize().replace('_', ' ')} scenario failed!")
             return False
 
     except Exception as e:
@@ -73,7 +73,7 @@ def run_all_scenarios(final_year=2050):
     print("="*60)
 
     for scenario, success in results.items():
-        status = "✓ SUCCESS" if success else "✗ FAILED"
+        status = " SUCCESS" if success else " FAILED"
         scenario_name = scenario.replace('_', ' ').title()
         print(f"{scenario_name:20}: {status}")
 
